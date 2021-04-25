@@ -84,14 +84,14 @@ class LIFConvNet(torch.nn.Module):
             # delete all spikes except for first
             zeros = torch.zeros_like(x.cpu()).detach().numpy()
             idxs = x.cpu().nonzero().detach().numpy()
-            spike_counter = np.zeros((FLAGS.batch_size, 28 * 28))
+            spike_counter = np.zeros((FLAGS.batch_size, 50 * 50))
             for t, batch, nrn in idxs:
                 if spike_counter[batch, nrn] == 0:
                     zeros[t, batch, nrn] = 1
                     spike_counter[batch, nrn] += 1
             x = torch.from_numpy(zeros).to(x.device)
 
-        x = x.reshape(self.seq_length, batch_size, 1, 28, 28)
+        x = x.reshape(self.seq_length, batch_size, 1, 50, 50)
         voltages = self.rsnn(x)
         m, _ = torch.max(voltages, 0)
         log_p_y = torch.nn.functional.log_softmax(m, dim=1)
@@ -258,8 +258,76 @@ def main(argv):
     val_dl = torch.utils.data.DataLoader(val_ds, batch_size, num_workers=3, pin_memory=True)
     test_dl = torch.utils.data.DataLoader(test_ds, batch_size, num_workers=3, pin_memory=True)
 
-    show_batch(train_dl)
-    plt.show()
+    label = os.environ.get("SLURM_JOB_ID", str(uuid.uuid4()))
+    if FLAGS.prefix:
+        path = f"runs/cancer/{FLAGS.prefix}/{label}"
+    else:
+        path = f"runs/cancer/{label}"
+
+    os.makedirs(path, exist_ok=True)
+    os.chdir(path)
+    FLAGS.append_flags_into_file("flags.txt")
+
+    input_features = 50 * 50
+
+    model = LIFConvNet(
+        input_features,
+        FLAGS.seq_length,
+        model=FLAGS.model,
+        only_first_spike=FLAGS.only_first_spike,
+    ).to(device)
+
+    if FLAGS.optimizer == "sgd":
+        optimizer = torch.optim.SGD(model.parameters(), lr=FLAGS.learning_rate)
+    elif FLAGS.optimizer == "adam":
+        optimizer = torch.optim.Adam(model.parameters(), lr=FLAGS.learning_rate)
+
+    if FLAGS.only_output:
+        optimizer = torch.optim.Adam(model.out.parameters(), lr=FLAGS.learning_rate)
+
+    training_losses = []
+    mean_losses = []
+    test_losses = []
+    accuracies = []
+
+    for epoch in range(FLAGS.epochs):
+        training_loss, mean_loss = train(
+            model, device, train_dl, optimizer, epoch, writer=writer
+        )
+        test_loss, accuracy = test(model, device, test_dl, epoch, writer=writer)
+
+        training_losses += training_loss
+        mean_losses.append(mean_loss)
+        test_losses.append(test_loss)
+        accuracies.append(accuracy)
+
+        max_accuracy = np.max(np.array(accuracies))
+
+        if (epoch % FLAGS.model_save_interval == 0) and FLAGS.save_model:
+            model_path = f"cancer-{epoch}.pt"
+            save(
+                model_path,
+                model=model,
+                optimizer=optimizer,
+                epoch=epoch,
+                is_best=accuracy > max_accuracy,
+            )
+
+    np.save("training_losses.npy", np.array(training_losses))
+    np.save("mean_losses.npy", np.array(mean_losses))
+    np.save("test_losses.npy", np.array(test_losses))
+    np.save("accuracies.npy", np.array(accuracies))
+    model_path = "cancer-final.pt"
+    save(
+        model_path,
+        epoch=epoch,
+        model=model,
+        optimizer=optimizer,
+        is_best=accuracy > max_accuracy,
+    )
+    if writer:
+        writer.close()
+
 
 if __name__ == "__main__":
     app.run(main)
