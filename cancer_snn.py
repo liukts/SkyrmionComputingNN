@@ -15,8 +15,15 @@ import torch
 import torch.utils.data
 import torchvision
 
-from norse.torch.models.conv import ConvNet4
 from norse.torch.module.encode import ConstantCurrentLIFEncoder
+
+from norse.torch.module.leaky_integrator import LILinearCell
+from norse.torch.functional.lif import LIFFeedForwardState
+from norse.torch.functional.leaky_integrator import LIState
+
+from norse.torch import LIFParameters, LIFState
+from norse.torch.module.lif import LIFCell, LIFRecurrentCell
+from norse.torch import LICell, LIState
 
 FLAGS = flags.FLAGS
 
@@ -36,7 +43,7 @@ flags.DEFINE_bool(
 flags.DEFINE_enum("device", "cuda", ["cpu", "cuda"], "Device to use by pytorch.")
 flags.DEFINE_integer("epochs", 2, "Number of training episodes to do.")
 flags.DEFINE_integer("seq_length", 200, "Number of timesteps to do.")
-flags.DEFINE_integer("batch_size", 100, "Number of examples in one minibatch.")
+flags.DEFINE_integer("batch_size", 5, "Number of examples in one minibatch.")
 flags.DEFINE_enum(
     "model",
     "super",
@@ -59,6 +66,54 @@ flags.DEFINE_boolean("big_net", False, "Use bigger net...")
 flags.DEFINE_boolean("only_output", False, "Train only the last layer...")
 flags.DEFINE_boolean("do_plot", False, "Do intermediate plots")
 flags.DEFINE_integer("random_seed", 1234, "Random seed to use")
+
+class ConvNet4(torch.nn.Module):
+    def __init__(
+        self, num_channels=3, feature_size=50, method="super", dtype=torch.float
+    ):
+        super(ConvNet4, self).__init__()
+        self.features = int(((feature_size - 4) / 2 - 4) / 2)
+
+        self.conv1 = torch.nn.Conv2d(num_channels, 32, 5, 1)
+        self.conv2 = torch.nn.Conv2d(32, 64, 5, 1)
+        self.fc1 = torch.nn.Linear(self.features * self.features * 64, 1024)
+        self.lif0 = LIFCell(
+            p=LIFParameters(method=method, alpha=100.0),
+        )
+        self.lif1 = LIFCell(
+            p=LIFParameters(method=method, alpha=100.0),
+        )
+        self.lif2 = LIFCell(p=LIFParameters(method=method, alpha=100.0))
+        self.out = LILinearCell(1024, 2)
+        self.dtype = dtype
+
+    def forward(self, x):
+        seq_length = x.shape[0]
+        batch_size = x.shape[1]
+
+        # specify the initial states
+        s0 = None
+        s1 = None
+        s2 = None
+        so = None
+
+        voltages = torch.zeros(
+            seq_length, batch_size, 2, device=x.device, dtype=self.dtype
+        )
+
+        for ts in range(seq_length):
+            z = self.conv1(x[ts, :])
+            z, s0 = self.lif0(z, s0)
+            z = torch.nn.functional.max_pool2d(z, 2, 2)
+            z = 10 * self.conv2(z)
+            z, s1 = self.lif1(z, s1)
+            z = torch.nn.functional.max_pool2d(z, 2, 2)
+            z = z.view(-1, self.features ** 2 * 64)
+            z = self.fc1(z)
+            z, s2 = self.lif2(z, s2)
+            v, so = self.out(torch.nn.functional.relu(z), so)
+            voltages[ts, :, :] = v
+        return voltages
 
 class LIFConvNet(torch.nn.Module):
     def __init__(
@@ -91,7 +146,7 @@ class LIFConvNet(torch.nn.Module):
                     spike_counter[batch, nrn] += 1
             x = torch.from_numpy(zeros).to(x.device)
 
-        x = x.reshape(self.seq_length, batch_size, 1, 50, 50)
+        x = x.reshape(self.seq_length, batch_size, 3, 50, 50)
         voltages = self.rsnn(x)
         m, _ = torch.max(voltages, 0)
         log_p_y = torch.nn.functional.log_softmax(m, dim=1)
