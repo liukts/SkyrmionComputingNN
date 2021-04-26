@@ -8,3 +8,4 @@ The following requirements are necessary to run the programs in the repo:
       - Create a directory named "cancer" and extract images into it
       - Delete the last directory (the one that is named oddly)
       - Run cancer_dataloader.py to split data into training, testing datasets
+      - Run cancer_snn.py to see that it works, but it is a poor network for the dataset, so don't let it finish.
