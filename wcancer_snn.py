@@ -1,22 +1,24 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import operator
 
 import torch
-from torch.autograd import Variable
 import torch.utils.data as data_utils
-import torch.nn.init as init
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
 from norse.torch import LIFParameters, LIFState
-from norse.torch.module.lif import LIFCell, LIFRecurrentCell
-# Notice the difference between "LIF" (leaky integrate-and-fire) and "LI" (leaky integrator)
-from norse.torch import LICell, LIState
+from norse.torch.module.lif import LIFRecurrentCell
+from norse.torch import LICell, LIState, ConstantCurrentLIFEncoder
 
+from tqdm import tqdm, trange
 from typing import NamedTuple
+
+if torch.cuda.is_available():
+    DEVICE = torch.device("cuda")
+else:
+    DEVICE = torch.device("cpu")
 
 # load data, process into tensor
 data = pd.read_csv("./wcancer_data.csv")
@@ -29,8 +31,12 @@ scaler = StandardScaler()
 x_train_trans = scaler.fit_transform(x_train)
 x_test_trans = scaler.fit_transform(x_test)
 train = data_utils.TensorDataset(torch.from_numpy(x_train_trans).float(),
-                                 torch.from_numpy(y_train.as_matrix()).float())
-dataloader = data_utils.DataLoader(train, batch_size=128, shuffle=False)
+                                 torch.from_numpy(y_train.to_numpy()).float())
+train_loader = data_utils.DataLoader(train, batch_size=128, shuffle=False)
+
+test = data_utils.TensorDataset(torch.from_numpy(x_test_trans).float(),
+                                 torch.from_numpy(y_test.to_numpy()).float())
+test_loader = data_utils.DataLoader(test, batch_size=128, shuffle=False)
 
 class SNNState(NamedTuple):
     lif0 : LIFState
@@ -40,7 +46,7 @@ class SNNState(NamedTuple):
 class SNN(torch.nn.Module):
     def __init__(self, input_features, hidden_features, output_features, record=False, dt=0.001):
         super(SNN, self).__init__()
-        self.l1 = LIFCell(
+        self.l1 = LIFRecurrentCell(
             input_features,
             hidden_features,
             p=LIFParameters(alpha=100, v_th=torch.tensor(0.5)),
@@ -55,7 +61,7 @@ class SNN(torch.nn.Module):
         self.record = record
 
     def forward(self, x):
-        seq_length, batch_size, _, _, _ = x.shape
+        seq_length, batch_size, _ = x.shape
         s1 = so = None
         voltages = []
 
@@ -73,16 +79,16 @@ class SNN(torch.nn.Module):
           )
 
         for ts in range(seq_length):
-            z = x[ts, :, :, :].view(-1, self.input_features)
+            z = x[ts, :, :].view(-1, self.input_features)
             z, s1 = self.l1(z, s1)
             z = self.fc_out(z)
             vo, so = self.out(z, so)
             if self.record:
-              self.recording.lif0.z[ts,:] = s1.z
-              self.recording.lif0.v[ts,:] = s1.v
-              self.recording.lif0.i[ts,:] = s1.i
-              self.recording.readout.v[ts,:] = so.v
-              self.recording.readout.i[ts,:] = so.i
+                self.recording.lif0.z[ts,:] = s1.z
+                self.recording.lif0.v[ts,:] = s1.v
+                self.recording.lif0.i[ts,:] = s1.i
+                self.recording.readout.v[ts,:] = so.v
+                self.recording.readout.i[ts,:] = so.i
             voltages += [vo]
 
         return torch.stack(voltages)
@@ -99,3 +105,87 @@ class Model(torch.nn.Module):
         x = self.snn(x)
         log_p_y = self.decoder(x)
         return log_p_y
+
+def decode(x):
+    x, _ = torch.max(x, 0)
+    log_p_y = torch.nn.functional.log_softmax(x, dim=1)
+    return log_p_y
+
+def train(model, device, train_loader, optimizer, epoch, max_epochs):
+    model.train()
+    losses = []
+
+    for (data, target) in tqdm(train_loader, leave=False):
+        data, target = data.to(device), target.to(device)
+        optimizer.zero_grad()
+        output = model(data)
+        loss_fn = torch.nn.MSELoss(size_average=False)
+        loss = loss_fn(output, target)
+        loss.backward()
+        optimizer.step()
+        losses.append(loss.item())
+
+    mean_loss = np.mean(losses)
+    return losses, mean_loss
+
+def test(model, device, test_loader, epoch):
+    model.eval()
+    test_loss = 0
+    correct = 0
+    with torch.no_grad():
+        for data, target in test_loader:
+            data, target = data.to(device), target.to(device)
+            output = model(data)
+            loss_fn = torch.nn.MSELoss(size_average=False)
+            test_loss += loss_fn(
+                output, target).item()  # sum up batch loss
+            pred = output.argmax(
+                dim=1, keepdim=True
+            )  # get the index of the max log-probability
+            correct += pred.eq(target.view_as(pred)).sum().item()
+
+    test_loss /= len(test_loader.dataset)
+
+    accuracy = 100.0 * correct / len(test_loader.dataset)
+
+    return test_loss, accuracy
+
+T = 32
+LR = 0.0001
+INPUT_FEATURES = x_train.shape[1]
+HIDDEN_FEATURES = 500
+OUTPUT_FEATURES = 1
+EPOCHS = 1000
+
+model = Model(
+    encoder=ConstantCurrentLIFEncoder(
+      seq_length=T,
+    ),
+    snn=SNN(
+      input_features=INPUT_FEATURES,
+      hidden_features=HIDDEN_FEATURES,
+      output_features=OUTPUT_FEATURES
+    ),
+    decoder=decode
+).to(DEVICE)
+
+optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+
+training_losses = []
+mean_losses = []
+test_losses = []
+accuracies = []
+
+torch.autograd.set_detect_anomaly(True)
+
+pbar = trange(EPOCHS, unit="epoch")
+for epoch in pbar:
+    training_loss, mean_loss = train(model, DEVICE, train_loader, optimizer, epoch, max_epochs=EPOCHS)
+    test_loss, accuracy = test(model, DEVICE, test_loader, epoch)
+    training_losses += training_loss
+    mean_losses.append(mean_loss)
+    test_losses.append(test_loss)
+    accuracies.append(accuracy)
+    pbar.set_postfix(accuracy=accuracies[-1])
+
+print(f"final accuracy: {accuracies[-1]}")
