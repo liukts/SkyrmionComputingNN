@@ -11,6 +11,7 @@ from sklearn.preprocessing import StandardScaler
 from norse.torch import LIFParameters, LIFState
 from norse.torch.module.lif import LIFRecurrentCell
 from norse.torch import LICell, LIState, ConstantCurrentLIFEncoder
+from norse.torch.module import encode
 
 from tqdm import tqdm, trange
 from typing import NamedTuple
@@ -19,6 +20,8 @@ if torch.cuda.is_available():
     DEVICE = torch.device("cuda")
 else:
     DEVICE = torch.device("cpu")
+
+BATCH_SIZE = 100
 
 # load data, process into tensor
 data = pd.read_csv("./wcancer_data.csv")
@@ -32,11 +35,11 @@ x_train_trans = scaler.fit_transform(x_train)
 x_test_trans = scaler.fit_transform(x_test)
 train = data_utils.TensorDataset(torch.from_numpy(x_train_trans).float(),
                                  torch.from_numpy(y_train.to_numpy()).float())
-train_loader = data_utils.DataLoader(train, batch_size=128, shuffle=False)
+train_loader = data_utils.DataLoader(train, batch_size=BATCH_SIZE, shuffle=False)
 
 test = data_utils.TensorDataset(torch.from_numpy(x_test_trans).float(),
                                  torch.from_numpy(y_test.to_numpy()).float())
-test_loader = data_utils.DataLoader(test, batch_size=128, shuffle=False)
+test_loader = data_utils.DataLoader(test, batch_size=BATCH_SIZE, shuffle=False)
 
 class SNNState(NamedTuple):
     lif0 : LIFState
@@ -44,51 +47,42 @@ class SNNState(NamedTuple):
 
 
 class SNN(torch.nn.Module):
-    def __init__(self, input_features, hidden_features, output_features, record=False, dt=0.001):
+    def __init__(self, input_features, hf1, hf2, output_features, record=False, dt=0.001):
         super(SNN, self).__init__()
         self.l1 = LIFRecurrentCell(
             input_features,
-            hidden_features,
-            p=LIFParameters(alpha=100, v_th=torch.tensor(0.5)),
+            hf1,
+            p=LIFParameters(method='super',alpha=100),
             dt=dt             
         )
+        self.l2 = LIFRecurrentCell(
+            hf1,
+            hf2,
+            p=LIFParameters(method='super',alpha=100),
+            dt=dt       
+        )
         self.input_features = input_features
-        self.fc_out = torch.nn.Linear(hidden_features, output_features, bias=False)
+        self.fc1 = torch.nn.Linear(hf1, hf2, bias=False)
+        self.fc2 = torch.nn.Linear(hf2, output_features, bias=False)
         self.out = LICell(dt=dt)
 
-        self.hidden_features = hidden_features
+        self.hf1 = hf1
+        self.hf2 = hf2
         self.output_features = output_features
         self.record = record
 
     def forward(self, x):
         seq_length, batch_size, _ = x.shape
-        s1 = so = None
+        s2 = s1 = so = None
         voltages = []
-
-        if self.record:
-          self.recording = SNNState(
-              LIFState(
-                z = torch.zeros(seq_length, batch_size, self.hidden_features),
-                v = torch.zeros(seq_length, batch_size, self.hidden_features),
-                i = torch.zeros(seq_length, batch_size, self.hidden_features)
-              ),
-              LIState(
-                v = torch.zeros(seq_length, batch_size, self.output_features),
-                i = torch.zeros(seq_length, batch_size, self.output_features)
-              )
-          )
 
         for ts in range(seq_length):
             z = x[ts, :, :].view(-1, self.input_features)
             z, s1 = self.l1(z, s1)
-            z = self.fc_out(z)
+            z = self.fc1(z)
+            z, s2 = self.l2(z, s2)
+            z = self.fc2(z)
             vo, so = self.out(z, so)
-            if self.record:
-                self.recording.lif0.z[ts,:] = s1.z
-                self.recording.lif0.v[ts,:] = s1.v
-                self.recording.lif0.i[ts,:] = s1.i
-                self.recording.readout.v[ts,:] = so.v
-                self.recording.readout.i[ts,:] = so.i
             voltages += [vo]
 
         return torch.stack(voltages)
@@ -119,7 +113,7 @@ def train(model, device, train_loader, optimizer, epoch, max_epochs):
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
         output = model(data)
-        loss_fn = torch.nn.MSELoss(size_average=False)
+        loss_fn = torch.nn.MSELoss(reduction='sum')
         loss = loss_fn(output, target)
         loss.backward()
         optimizer.step()
@@ -136,7 +130,7 @@ def test(model, device, test_loader, epoch):
         for data, target in test_loader:
             data, target = data.to(device), target.to(device)
             output = model(data)
-            loss_fn = torch.nn.MSELoss(size_average=False)
+            loss_fn = torch.nn.MSELoss(reduction='sum')
             test_loss += loss_fn(
                 output, target).item()  # sum up batch loss
             pred = output.argmax(
@@ -150,17 +144,15 @@ def test(model, device, test_loader, epoch):
 
     return test_loss, accuracy
 
-T = 32
-LR = 0.0001
+T = 50
+LR = 0.01
 INPUT_FEATURES = x_train.shape[1]
-HIDDEN_FEATURES = 500
+HIDDEN_FEATURES = 100
 OUTPUT_FEATURES = 1
-EPOCHS = 1000
+EPOCHS = 100
 
 model = Model(
-    encoder=ConstantCurrentLIFEncoder(
-      seq_length=T,
-    ),
+    encoder=encode.PoissonEncoder(seq_length=T,dt=0.001,f_max=1e2),
     snn=SNN(
       input_features=INPUT_FEATURES,
       hidden_features=HIDDEN_FEATURES,
