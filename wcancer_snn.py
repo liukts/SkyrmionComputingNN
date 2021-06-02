@@ -132,15 +132,15 @@ def test(model, device, test_loader, epoch):
 
     return test_loss, accuracy
 
-T = 50
-LR = 0.005
+T = 70
+LR = 0.01
 INPUT_FEATURES = x_train.shape[1]
 HIDDEN_FEATURES = 100
 OUTPUT_FEATURES = 2
 EPOCHS = 50
 
 model = Model(
-    encoder=encode.PoissonEncoder(seq_length=T,dt=0.001,f_max=1e2),
+    encoder=encode.PoissonEncoder(seq_length=T),
     snn=SNN(
       input_features=INPUT_FEATURES,
       hidden_features=HIDDEN_FEATURES,
