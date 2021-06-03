@@ -9,7 +9,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
 from norse.torch import LIFParameters, LIFState
-from norse.torch.module.lif import LIFRecurrentCell
+from norse.torch.module.lif import LIFCell, LIFRecurrentCell
 from norse.torch import LICell, LIState, ConstantCurrentLIFEncoder
 from norse.torch.module import encode
 
@@ -21,7 +21,8 @@ if torch.cuda.is_available():
 else:
     DEVICE = torch.device("cpu")
 
-BATCH_SIZE = 100
+BATCH_SIZE = 500
+MODELTYPE = "SNN"  # available flags are SNN and Recurrent
 
 # load data, process into tensor
 data = pd.read_csv("./wcancer_data.csv")
@@ -46,9 +47,9 @@ class SNNState(NamedTuple):
     readout : LIState
 
 
-class SNN(torch.nn.Module):
+class RecurrentSNN(torch.nn.Module):
     def __init__(self, input_features, hidden_features, output_features, record=False, dt=0.001):
-        super(SNN, self).__init__()
+        super(RecurrentSNN, self).__init__()
         self.l1 = LIFRecurrentCell(
             input_features,
             hidden_features,
@@ -71,6 +72,39 @@ class SNN(torch.nn.Module):
         for ts in range(seq_length):
             z = x[ts, :, :].view(-1, self.input_features)
             z, s1 = self.l1(z, s1)
+            z = self.fc_out(z)
+            vo, so = self.out(z, so)
+            voltages += [vo]
+
+        return torch.stack(voltages)
+
+class SNN(torch.nn.Module):
+    def __init__(self, input_features, hf1, hf2, output_features, record=False, dt=0.001):
+        super(SNN, self).__init__()
+        self.l1 = LIFCell(p=LIFParameters(method='super',alpha=100))
+        self.l2 = LIFCell(p=LIFParameters(method='super',alpha=100))
+        self.input_features = input_features
+        self.fc1 = torch.nn.Linear(input_features, hf1, bias=False)
+        self.fc2 = torch.nn.Linear(hf1, hf2, bias=False)
+        self.fc_out = torch.nn.Linear(hf2, output_features, bias=False)
+        self.out = LICell(dt=dt)
+
+        self.hf1 = hf1
+        self.hf2 = hf2
+        self.output_features = output_features
+        self.record = record
+
+    def forward(self, x):
+        seq_length, batch_size, _ = x.shape
+        s2 = s1 = so = None
+        voltages = []
+
+        for ts in range(seq_length):
+            z = x[ts, :, :].view(-1, self.input_features)
+            z = self.fc1(z)
+            z, s1 = self.l1(z, s1)
+            z = self.fc2(z)
+            z, s2 = self.l2(z, s2)
             z = self.fc_out(z)
             vo, so = self.out(z, so)
             voltages += [vo]
@@ -132,22 +166,36 @@ def test(model, device, test_loader, epoch):
 
     return test_loss, accuracy
 
-T = 70
-LR = 0.01
+T = 100
+LR = 0.007
 INPUT_FEATURES = x_train.shape[1]
 HIDDEN_FEATURES = 100
+HF1 = 40
+HF2 = 20
 OUTPUT_FEATURES = 2
-EPOCHS = 50
+EPOCHS = 200
 
-model = Model(
-    encoder=encode.PoissonEncoder(seq_length=T),
-    snn=SNN(
-      input_features=INPUT_FEATURES,
-      hidden_features=HIDDEN_FEATURES,
-      output_features=OUTPUT_FEATURES
-    ),
-    decoder=decode
-).to(DEVICE)
+if MODELTYPE == "Recurrent":
+    model = Model(
+        encoder=encode.PoissonEncoder(seq_length=T),
+        snn=RecurrentSNN(
+        input_features=INPUT_FEATURES,
+        hidden_features=HIDDEN_FEATURES,
+        output_features=OUTPUT_FEATURES
+        ),
+        decoder=decode
+    ).to(DEVICE)
+elif MODELTYPE == "SNN":
+    model = Model(
+        encoder=encode.PoissonEncoder(seq_length=T, f_max=1000),
+        snn=SNN(
+        input_features=INPUT_FEATURES,
+        hf1 = HF1,
+        hf2 = HF2,
+        output_features=OUTPUT_FEATURES
+        ),
+        decoder=decode
+    ).to(DEVICE)
 
 optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 
@@ -166,6 +214,6 @@ for epoch in pbar:
     mean_losses.append(mean_loss)
     test_losses.append(test_loss)
     accuracies.append(accuracy)
-    pbar.set_postfix(accuracy=accuracies[-1])
+    pbar.set_postfix(accuracy=accuracy)
 
 print(f"final accuracy: {accuracies[-1]}")
