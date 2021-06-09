@@ -16,32 +16,62 @@ target_dir = "0609_mnist_SeqNet"
 BATCH_SIZE = 100
 INPUT_SIZE = 28 * 28
 MODEL_TYPE = "SeqNet" # choices are ConvNet or SeqNet
+DATASET = "mnist" # choices are mnist or kmnist
 
-transform = torchvision.transforms.Compose(
+mnist_transform = torchvision.transforms.Compose(
     [
         torchvision.transforms.ToTensor(),
         torchvision.transforms.Normalize((0.1307,), (0.3081,)),
     ]
 )
 
-train_data = torchvision.datasets.MNIST(
+kmnist_transform = torchvision.transforms.Compose(
+    [
+        torchvision.transforms.ToTensor(),
+        torchvision.transforms.Normalize((0.1307,), (0.3081,))
+    ]
+)
+
+train_data_mnist = torchvision.datasets.MNIST(
     root=".",
     train=True,
     download=True,
-    transform=transform,
+    transform=mnist_transform,
 )
 
-train_loader = torch.utils.data.DataLoader(
-    train_data,
+train_loader_mnist = torch.utils.data.DataLoader(
+    train_data_mnist,
     batch_size=BATCH_SIZE,
     shuffle=True
 )
 
-test_loader = torch.utils.data.DataLoader(
+test_loader_mnist = torch.utils.data.DataLoader(
     torchvision.datasets.MNIST(
         root=".",
         train=False,
-        transform=transform,
+        transform=mnist_transform,
+    ),
+    batch_size=BATCH_SIZE
+)
+
+train_data_kmnist = torchvision.datasets.KMNIST(
+    root=".",
+    train=True,
+    download=True,
+    transform=kmnist_transform,
+)
+
+train_loader_kmnist = torch.utils.data.DataLoader(
+    train_data_kmnist,
+    batch_size=BATCH_SIZE,
+    shuffle=True
+)
+
+test_loader_kmnist = torch.utils.data.DataLoader(
+    torchvision.datasets.KMNIST(
+        root=".",
+        train=False,
+        transform=kmnist_transform,
     ),
     batch_size=BATCH_SIZE
 )
@@ -129,11 +159,18 @@ if torch.cuda.is_available():
 else:
     DEVICE = torch.device("cpu")
 
+if DATASET == "mnist":
+    train_loader = train_loader_mnist
+    test_loader = test_loader_mnist
+elif DATASET == "kmnist":
+    train_loader = train_loader_kmnist
+    test_loader = test_loader_kmnist
+
 rseed = 0
 torch.manual_seed(rseed)
 if MODEL_TYPE == "ConvNet":
-    lr = 0.01
-    momentum = 0.5
+    lr = 0.005
+    momentum = 0.9
     model = ConvNet().to(DEVICE)
 elif MODEL_TYPE == "SeqNet":
     lr = 0.003
