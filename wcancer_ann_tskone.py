@@ -5,6 +5,7 @@ import torch.utils.data as data_utils
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
+import tskone_module as tsk
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
@@ -20,7 +21,12 @@ else:
     DEVICE = torch.device("cpu")
 
 # folder to save results
-target_dir = "0628_wcancer_ann"
+target_dir = "0724_wcancer_ann_tskone"
+
+if not os.path.isdir("./outputs/"):
+    os.mkdir("./outputs/")
+if not os.path.isdir("./outputs/" + target_dir):
+    os.mkdir("./outputs/" + target_dir)
 
 BATCH_SIZE = 500
 
@@ -47,12 +53,19 @@ INPUT_SIZE = x_train.shape[1]
 class SeqNet(nn.Module):
     def __init__(self):
         super(SeqNet, self).__init__()
-        self.l1 = nn.Linear(INPUT_SIZE, 2, bias=False)
+        l1 = nn.Linear(INPUT_SIZE,2)
+        self.t = tsk.TSKONE()
+        self.tout = tsk.TSKONEout()
+        self.l1_w = torch.nn.Parameter(l1.weight)
+        self.l1_b = torch.nn.Parameter(l1.bias)
         self.r = nn.ReLU()
 
     def forward(self, x):
         x = x.view(-1, INPUT_SIZE)
-        x = self.l1(x)
+        x = self.t(x,torch.ones_like(x))
+        x = F.linear(x,self.l1_w,self.l1_b)
+        # x = self.tout(x)
+        # self.l1_w.data = self.l1_w/(2*torch.max(self.l1_w))
         return F.log_softmax(x, dim=1)
 
 def train(model, device, train_loader, optimizer):
@@ -108,10 +121,10 @@ else:
 rseed = 0
 torch.manual_seed(rseed)
 
-lr = 0.7
+lr = 0.65
 model = SeqNet().to(DEVICE)
 optimizer = optim.Adam(model.parameters(), lr=lr)
-epochs = 10000
+epochs = 5000
 
 train_losses = []
 test_losses = []
@@ -121,13 +134,13 @@ pbar = trange(epochs, ncols=80, unit="epoch")
 for epoch in pbar:
     training_loss, mean_loss = train(model, DEVICE, train_loader, optimizer)
     test_loss, accuracy = test(model, DEVICE, test_loader)
+    #model._modules['l1'].apply(constraints)
     train_losses += training_loss
     mean_losses.append(mean_loss)
     test_losses.append(test_loss)
     accuracies.append(accuracy)       
     pbar.set_postfix(accuracy=accuracies[-1])
 
-os.mkdir("./outputs/" + target_dir)
 np.save("./outputs/" + target_dir + "/training_losses.npy", np.array(train_losses))
 np.save("./outputs/" + target_dir + "/mean_losses.npy", np.array(mean_losses))
 np.save("./outputs/" + target_dir + "/test_losses.npy", np.array(test_losses))
