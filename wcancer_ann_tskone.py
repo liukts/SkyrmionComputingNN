@@ -20,21 +20,35 @@ if torch.cuda.is_available():
 else:
     DEVICE = torch.device("cpu")
 
+# FLAGS
+ctext = True
+direct = False
+
 # folder to save results
-target_dir = "0724_wcancer_ann_tskone"
+target_dir = "0724_tskone_context"
 
-if not os.path.isdir("./outputs/"):
-    os.mkdir("./outputs/")
-if not os.path.isdir("./outputs/" + target_dir):
-    os.mkdir("./outputs/" + target_dir)
+if not os.path.isdir("./outputs/context/"):
+    os.mkdir("./outputs/context/")
+if not os.path.isdir("./outputs/context/" + target_dir):
+    os.mkdir("./outputs/context/" + target_dir)
 
-BATCH_SIZE = 500
+BATCH_SIZE = 1
 
 # load data, process into tensor
-data = pd.read_csv("./wcancer_data.csv")
-x = data.drop(["id", "diagnosis", "Unnamed: 32"], axis=1)  # prune unused data
-diag = {"M": 1, "B": 0}
-y = data["diagnosis"].replace(diag)
+if ctext is False:
+    dataset = "./wcancer_data.csv"
+    data = pd.read_csv(dataset)
+    x = data.drop(["id", "diagnosis", "Unnamed: 32"], axis=1)  # prune unused data
+    diag = {"M": 1, "B": 0}
+    y = data["diagnosis"].replace(diag)
+else:
+    dataset = "./wcancer_data_context.csv"
+    data = pd.read_csv(dataset)
+    x = data.drop(["diagnosis"], axis=1) # remove class
+    y = data["diagnosis"]
+    check = {"T": 1, "F": 0}
+    sex = {"F": 1, "M": 0}
+    x = x.replace(check).replace(sex)
 x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.2,
                                                     random_state=85)
 scaler = MinMaxScaler((3,4.5))
@@ -58,12 +72,32 @@ class SeqNet(nn.Module):
         self.tout = tsk.TSKONEout()
         self.l1_w = torch.nn.Parameter(l1.weight)
         self.l1_b = torch.nn.Parameter(l1.bias)
-        self.r = nn.ReLU()
 
     def forward(self, x):
         x = x.view(-1, INPUT_SIZE)
         x = self.t(x,torch.ones_like(x))
         x = F.linear(x,self.l1_w,self.l1_b)
+        x = torch.abs(x)
+        # x = self.tout(x)
+        # self.l1_w.data = self.l1_w/(2*torch.max(self.l1_w))
+        return F.log_softmax(x, dim=1)
+
+class SeqNetctext(nn.Module):
+    def __init__(self):
+        super(SeqNetctext, self).__init__()
+        l1 = nn.Linear(INPUT_SIZE,2)
+        self.t = tsk.TSKONE()
+        self.tout = tsk.TSKONEout()
+        self.l1_w = torch.nn.Parameter(l1.weight)
+        self.l1_b = torch.nn.Parameter(l1.bias)
+        self.ct = tsk.CTEXTgen()
+
+    def forward(self, x):
+        x = x.view(-1, INPUT_SIZE)
+        x,context = self.ct(x)
+        x = self.t(x,context)
+        x = F.linear(x,self.l1_w,self.l1_b)
+        x = torch.abs(x)
         # x = self.tout(x)
         # self.l1_w.data = self.l1_w/(2*torch.max(self.l1_w))
         return F.log_softmax(x, dim=1)
@@ -121,10 +155,13 @@ else:
 rseed = 0
 torch.manual_seed(rseed)
 
-lr = 0.65
-model = SeqNet().to(DEVICE)
+lr = 0.01
+if ctext is True and direct is False:
+    model = SeqNetctext().to(DEVICE)
+else:
+    model = SeqNet().to(DEVICE)
 optimizer = optim.Adam(model.parameters(), lr=lr)
-epochs = 5000
+epochs = 1000
 
 train_losses = []
 test_losses = []
@@ -141,11 +178,11 @@ for epoch in pbar:
     accuracies.append(accuracy)       
     pbar.set_postfix(accuracy=accuracies[-1])
 
-np.save("./outputs/" + target_dir + "/training_losses.npy", np.array(train_losses))
-np.save("./outputs/" + target_dir + "/mean_losses.npy", np.array(mean_losses))
-np.save("./outputs/" + target_dir + "/test_losses.npy", np.array(test_losses))
-np.save("./outputs/" + target_dir + "/accuracies.npy", np.array(accuracies))
-model_path = "./outputs/" + target_dir + "/model.pt"
+np.save("./outputs/context/" + target_dir + "/training_losses.npy", np.array(train_losses))
+np.save("./outputs/context/" + target_dir + "/mean_losses.npy", np.array(mean_losses))
+np.save("./outputs/context/" + target_dir + "/test_losses.npy", np.array(test_losses))
+np.save("./outputs/context/" + target_dir + "/accuracies.npy", np.array(accuracies))
+model_path = "./outputs/context/" + target_dir + "/model.pt"
 save(
     model_path,
     epoch=epoch,
