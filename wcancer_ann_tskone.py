@@ -21,21 +21,21 @@ else:
     DEVICE = torch.device("cpu")
 
 # FLAGS
-ctext = True
-direct = False
+ctext = False
+direct = True
 
 # folder to save results
-target_dir = "0724_tskone_context"
+target_dir = "0724_tskone_vanilla"
 
 if not os.path.isdir("./outputs/context/"):
     os.mkdir("./outputs/context/")
 if not os.path.isdir("./outputs/context/" + target_dir):
     os.mkdir("./outputs/context/" + target_dir)
 
-BATCH_SIZE = 1
+BATCH_SIZE = 500
 
 # load data, process into tensor
-if ctext is False:
+if ctext is False or direct is False:
     dataset = "./wcancer_data.csv"
     data = pd.read_csv(dataset)
     x = data.drop(["id", "diagnosis", "Unnamed: 32"], axis=1)  # prune unused data
@@ -48,18 +48,27 @@ else:
     y = data["diagnosis"]
     check = {"T": 1, "F": 0}
     sex = {"F": 1, "M": 0}
-    x = x.replace(check).replace(sex)
-x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.2,
+    x['sex'] = x['sex'].replace(sex)
+    x = x.replace(check)
+context = torch.from_numpy(np.load('contextmask.npy')).to(DEVICE)
+x_train, x_test, y_train, y_test, c_train, c_test = train_test_split(x, y, context, test_size=0.2,
                                                     random_state=85)
 scaler = MinMaxScaler((3,4.5))
 x_train_trans = scaler.fit_transform(x_train)
 x_test_trans = scaler.fit_transform(x_test)
-train = data_utils.TensorDataset(torch.from_numpy(x_train_trans).float(),
-                                 torch.from_numpy(y_train.to_numpy()).float())
-train_loader = data_utils.DataLoader(train, batch_size=BATCH_SIZE, shuffle=False)
-
-test = data_utils.TensorDataset(torch.from_numpy(x_test_trans).float(),
+if direct is False:
+    train = data_utils.TensorDataset(torch.from_numpy(x_train_trans).float(),
+                                    torch.from_numpy(y_train.to_numpy()).float(),
+                                    c_train.float())
+    test = data_utils.TensorDataset(torch.from_numpy(x_test_trans).float(),
+                                 torch.from_numpy(y_test.to_numpy()).float(),
+                                 c_test.float())
+else:
+    train = data_utils.TensorDataset(torch.from_numpy(x_train_trans).float(),
+                                    torch.from_numpy(y_train.to_numpy()).float())
+    test = data_utils.TensorDataset(torch.from_numpy(x_test_trans).float(),
                                  torch.from_numpy(y_test.to_numpy()).float())
+train_loader = data_utils.DataLoader(train, batch_size=BATCH_SIZE, shuffle=False)
 test_loader = data_utils.DataLoader(test, batch_size=BATCH_SIZE, shuffle=False)
 
 INPUT_SIZE = x_train.shape[1]
@@ -92,9 +101,9 @@ class SeqNetctext(nn.Module):
         self.l1_b = torch.nn.Parameter(l1.bias)
         self.ct = tsk.CTEXTgen()
 
-    def forward(self, x):
+    def forward(self, x, ctext):
         x = x.view(-1, INPUT_SIZE)
-        x,context = self.ct(x)
+        x,context = self.ct(x,ctext)
         x = self.t(x,context)
         x = F.linear(x,self.l1_w,self.l1_b)
         x = torch.abs(x)
@@ -102,36 +111,58 @@ class SeqNetctext(nn.Module):
         # self.l1_w.data = self.l1_w/(2*torch.max(self.l1_w))
         return F.log_softmax(x, dim=1)
 
-def train(model, device, train_loader, optimizer):
+def train(model, device, train_loader, optimizer, direct):
     model.train()
     losses = []
-    for (data, target) in tqdm(train_loader, desc='train', unit='batch', ncols=80, leave=False):
-        data, target = data.to(device), target.long().to(device)
-        optimizer.zero_grad()
-        output = model(data)
-        loss = torch.nn.functional.nll_loss(output,target)
-        loss.backward()
-        optimizer.step()
-        losses.append(loss.item())
+    if direct is False:
+        for data, target, context in tqdm(train_loader, desc='train', unit='batch', ncols=80, leave=False):
+            data, target, context = data.to(device), target.long().to(device), context.to(device)
+            optimizer.zero_grad()
+            output = model(data,context)
+            loss = torch.nn.functional.nll_loss(output,target)
+            loss.backward()
+            optimizer.step()
+            losses.append(loss.item())
+    else:
+        for data, target in tqdm(train_loader, desc='train', unit='batch', ncols=80, leave=False):
+            data, target = data.to(device), target.long().to(device)
+            optimizer.zero_grad()
+            output = model(data)
+            loss = torch.nn.functional.nll_loss(output,target)
+            loss.backward()
+            optimizer.step()
+            losses.append(loss.item())
 
     mean_loss = np.mean(losses)
     return losses, mean_loss
 
-def test(model, device, test_loader):
+def test(model, device, test_loader, direct):
     model.eval()
     test_loss = 0
     correct = 0
     with torch.no_grad():
-        for data, target in tqdm(test_loader, desc='test', unit='batch', ncols=80, leave=False):
-            data, target = data.to(device), target.long().to(device)
-            output = model(data)
-            test_loss += F.nll_loss(
-                output, target, reduction="sum"
-            ).item()  # sum up batch loss
-            pred = output.argmax(
-                dim=1, keepdim=True
-            )  # get the index of the max log-probability
-            correct += pred.eq(target.view_as(pred)).sum().item()
+        if direct is False:
+            for data, target, context in tqdm(test_loader, desc='test', unit='batch', ncols=80, leave=False):
+                data, target, context = data.to(device), target.long().to(device), context.to(device)
+                output = model(data,context)
+                test_loss += F.nll_loss(
+                    output, target, reduction="sum"
+                ).item()  # sum up batch loss
+                pred = output.argmax(
+                    dim=1, keepdim=True
+                )  # get the index of the max log-probability
+                correct += pred.eq(target.view_as(pred)).sum().item()
+        else:
+            for data, target in tqdm(test_loader, desc='test', unit='batch', ncols=80, leave=False):
+                data, target = data.to(device), target.long().to(device)
+                output = model(data)
+                test_loss += F.nll_loss(
+                    output, target, reduction="sum"
+                ).item()  # sum up batch loss
+                pred = output.argmax(
+                    dim=1, keepdim=True
+                )  # get the index of the max log-probability
+                correct += pred.eq(target.view_as(pred)).sum().item()
 
     test_loss /= len(test_loader.dataset)
     accuracy = 100.0 * correct / len(test_loader.dataset)
@@ -155,7 +186,7 @@ else:
 rseed = 0
 torch.manual_seed(rseed)
 
-lr = 0.01
+lr = 0.05
 if ctext is True and direct is False:
     model = SeqNetctext().to(DEVICE)
 else:
@@ -169,9 +200,8 @@ mean_losses = []
 accuracies = []
 pbar = trange(epochs, ncols=80, unit="epoch")
 for epoch in pbar:
-    training_loss, mean_loss = train(model, DEVICE, train_loader, optimizer)
-    test_loss, accuracy = test(model, DEVICE, test_loader)
-    #model._modules['l1'].apply(constraints)
+    training_loss, mean_loss = train(model, DEVICE, train_loader, optimizer, direct)
+    test_loss, accuracy = test(model, DEVICE, test_loader, direct)
     train_losses += training_loss
     mean_losses.append(mean_loss)
     test_losses.append(test_loss)
