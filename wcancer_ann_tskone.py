@@ -33,6 +33,8 @@ if not os.path.isdir("./outputs/context/" + target_dir):
     os.mkdir("./outputs/context/" + target_dir)
 
 BATCH_SIZE = 500
+EPOCHS = 1000
+LR = 0.05
 
 # load data, process into tensor
 if ctext is False or direct is False:
@@ -222,21 +224,21 @@ else:
 rseed = 0
 torch.manual_seed(rseed)
 
-lr = 0.05
+LR = 0.05
 if ctext is True and direct is False:
     model = SeqNetCtext().to(DEVICE)
     modeltest = SeqNetCtextInf().to(DEVICE)
 else:
     model = SeqNet().to(DEVICE)
     modeltest = SeqNetInf().to(DEVICE)
-optimizer = optim.Adam(model.parameters(), lr=lr)
-epochs = 1000
+optimizer = optim.Adam(model.parameters(), lr=LR)
+EPOCHS = 1000
 
 train_losses = []
 test_losses = []
 mean_losses = []
 accuracies = []
-pbar = trange(epochs, ncols=80, unit="epoch")
+pbar = trange(EPOCHS, ncols=80, unit="epoch")
 for epoch in pbar:
     training_loss, mean_loss, weight, bias = train(model, DEVICE, train_loader, optimizer, direct)
     test_loss, accuracy = test(modeltest, DEVICE, test_loader, direct, weight, bias)
