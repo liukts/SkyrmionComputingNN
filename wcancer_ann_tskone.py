@@ -20,21 +20,23 @@ if torch.cuda.is_available():
 else:
     DEVICE = torch.device("cpu")
 
+# CONST
+BATCH_SIZE = 500
+EPOCHS = 800
+LR = 0.05
+SEEDS = 5
+
 # FLAGS
-ctext = False
-direct = True
+ctext = True
+direct = False
 
 # folder to save results
-target_dir = "0725_tskone_baseline"
+target_dir = "0725_tskone_context"
 
-if not os.path.isdir("./outputs/context/"):
-    os.mkdir("./outputs/context/")
-if not os.path.isdir("./outputs/context/" + target_dir):
-    os.mkdir("./outputs/context/" + target_dir)
-
-BATCH_SIZE = 500
-EPOCHS = 1000
-LR = 0.05
+if not os.path.isdir("./context/"):
+    os.mkdir("./context/")
+if not os.path.isdir("./context/" + target_dir):
+    os.mkdir("./context/" + target_dir)
 
 # load data, process into tensor
 if ctext is False or direct is False:
@@ -221,38 +223,35 @@ if torch.cuda.is_available():
 else:
     DEVICE = torch.device("cpu")
 
-rseed = 0
-torch.manual_seed(rseed)
+train_losses = np.empty((SEEDS,EPOCHS))
+test_losses = np.empty((SEEDS,EPOCHS))
+mean_losses = np.empty((SEEDS,EPOCHS))
+accuracies = np.empty((SEEDS,EPOCHS))
+for rseed in range(0,SEEDS):
+    torch.manual_seed(rseed)
+    if ctext is True and direct is False:
+        model = SeqNetCtext().to(DEVICE)
+        modeltest = SeqNetCtextInf().to(DEVICE)
+    else:
+        model = SeqNet().to(DEVICE)
+        modeltest = SeqNetInf().to(DEVICE)
+    optimizer = optim.Adam(model.parameters(), lr=LR)
 
-LR = 0.05
-if ctext is True and direct is False:
-    model = SeqNetCtext().to(DEVICE)
-    modeltest = SeqNetCtextInf().to(DEVICE)
-else:
-    model = SeqNet().to(DEVICE)
-    modeltest = SeqNetInf().to(DEVICE)
-optimizer = optim.Adam(model.parameters(), lr=LR)
-EPOCHS = 1000
+    pbar = trange(EPOCHS, ncols=80, unit="epoch")
+    for epoch in pbar:
+        training_loss, mean_loss, weight, bias = train(model, DEVICE, train_loader, optimizer, direct)
+        test_loss, accuracy = test(modeltest, DEVICE, test_loader, direct, weight, bias)
+        # train_losses[rseed,epoch] = training_loss
+        mean_losses[rseed,epoch] = mean_loss
+        test_losses[rseed,epoch] = test_loss
+        accuracies[rseed,epoch] = accuracy
+        pbar.set_postfix(accuracy=accuracy)
 
-train_losses = []
-test_losses = []
-mean_losses = []
-accuracies = []
-pbar = trange(EPOCHS, ncols=80, unit="epoch")
-for epoch in pbar:
-    training_loss, mean_loss, weight, bias = train(model, DEVICE, train_loader, optimizer, direct)
-    test_loss, accuracy = test(modeltest, DEVICE, test_loader, direct, weight, bias)
-    train_losses += training_loss
-    mean_losses.append(mean_loss)
-    test_losses.append(test_loss)
-    accuracies.append(accuracy)       
-    pbar.set_postfix(accuracy=accuracies[-1])
-
-np.save("./outputs/context/" + target_dir + "/training_losses.npy", np.array(train_losses))
-np.save("./outputs/context/" + target_dir + "/mean_losses.npy", np.array(mean_losses))
-np.save("./outputs/context/" + target_dir + "/test_losses.npy", np.array(test_losses))
-np.save("./outputs/context/" + target_dir + "/accuracies.npy", np.array(accuracies))
-model_path = "./outputs/context/" + target_dir + "/model.pt"
+# np.save("./outputs/context/" + target_dir + "/train_losses.npy", np.array(train_losses))
+np.save("./context/" + target_dir + "/mean_losses.npy", np.array(mean_losses))
+np.save("./context/" + target_dir + "/test_losses.npy", np.array(test_losses))
+np.save("./context/" + target_dir + "/accuracies.npy", np.array(accuracies))
+model_path = "./context/" + target_dir + "/model.pt"
 save(
     model_path,
     epoch=epoch,
