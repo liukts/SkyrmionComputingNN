@@ -40,7 +40,7 @@ def tskone_out(input: Tensor) -> Tensor:
     
     # tskone calculation, input in mT, output in dM
     
-    return torch.abs(-0.02035931*torch.square(input) + 0.37077425*input)
+    return torch.abs(-3.46620416e-3*torch.pow(input,3) - 2.18491891e-12*torch.pow(input,2) + 3.44760852e-1*input)
 
 def ctext(input: Tensor, ctextdet: Tensor) -> Tuple[Tensor,Tensor]:
 

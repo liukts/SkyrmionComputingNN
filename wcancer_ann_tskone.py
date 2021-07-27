@@ -25,7 +25,7 @@ ctext = False
 direct = True
 
 # folder to save results
-target_dir = "0724_tskone_vanilla"
+target_dir = "0725_tskone_baseline"
 
 if not os.path.isdir("./outputs/context/"):
     os.mkdir("./outputs/context/")
@@ -87,13 +87,27 @@ class SeqNet(nn.Module):
         x = self.t(x,torch.ones_like(x))
         x = F.linear(x,self.l1_w,self.l1_b)
         x = torch.abs(x)
-        # x = self.tout(x)
-        # self.l1_w.data = self.l1_w/(2*torch.max(self.l1_w))
         return F.log_softmax(x, dim=1)
 
-class SeqNetctext(nn.Module):
+class SeqNetInf(nn.Module):
     def __init__(self):
-        super(SeqNetctext, self).__init__()
+        super(SeqNetInf, self).__init__()
+        l1 = nn.Linear(INPUT_SIZE,2)
+        self.t = tsk.TSKONE()
+        self.tout = tsk.TSKONEout()
+        self.l1_w = torch.nn.Parameter(l1.weight)
+        self.l1_b = torch.nn.Parameter(l1.bias)
+
+    def forward(self, x):
+        x = x.view(-1, INPUT_SIZE)
+        x = self.t(x,torch.ones_like(x))
+        x = F.linear(x,self.l1_w,self.l1_b)
+        x = self.tout(x)
+        return F.log_softmax(x, dim=1)
+
+class SeqNetCtext(nn.Module):
+    def __init__(self):
+        super(SeqNetCtext, self).__init__()
         l1 = nn.Linear(INPUT_SIZE,2)
         self.t = tsk.TSKONE()
         self.tout = tsk.TSKONEout()
@@ -107,8 +121,24 @@ class SeqNetctext(nn.Module):
         x = self.t(x,context)
         x = F.linear(x,self.l1_w,self.l1_b)
         x = torch.abs(x)
-        # x = self.tout(x)
-        # self.l1_w.data = self.l1_w/(2*torch.max(self.l1_w))
+        return F.log_softmax(x, dim=1)
+
+class SeqNetCtextInf(nn.Module):
+    def __init__(self):
+        super(SeqNetCtextInf, self).__init__()
+        l1 = nn.Linear(INPUT_SIZE,2)
+        self.t = tsk.TSKONE()
+        self.tout = tsk.TSKONEout()
+        self.l1_w = torch.nn.Parameter(l1.weight)
+        self.l1_b = torch.nn.Parameter(l1.bias)
+        self.ct = tsk.CTEXTgen()
+
+    def forward(self, x, ctext):
+        x = x.view(-1, INPUT_SIZE)
+        x,context = self.ct(x,ctext)
+        x = self.t(x,context)
+        x = F.linear(x,self.l1_w,self.l1_b)
+        x = self.tout(x)
         return F.log_softmax(x, dim=1)
 
 def train(model, device, train_loader, optimizer, direct):
@@ -134,9 +164,11 @@ def train(model, device, train_loader, optimizer, direct):
             losses.append(loss.item())
 
     mean_loss = np.mean(losses)
-    return losses, mean_loss
+    weight = model.l1_w
+    bias = model.l1_b
+    return losses, mean_loss, weight, bias
 
-def test(model, device, test_loader, direct):
+def test(model, device, test_loader, direct, weight, bias):
     model.eval()
     test_loss = 0
     correct = 0
@@ -144,6 +176,8 @@ def test(model, device, test_loader, direct):
         if direct is False:
             for data, target, context in tqdm(test_loader, desc='test', unit='batch', ncols=80, leave=False):
                 data, target, context = data.to(device), target.long().to(device), context.to(device)
+                model.l1_w.data = weight*0.13/(torch.abs(torch.max(weight)))
+                model.l1_b.data = bias*0.13/(torch.abs(torch.max(weight)))
                 output = model(data,context)
                 test_loss += F.nll_loss(
                     output, target, reduction="sum"
@@ -155,6 +189,8 @@ def test(model, device, test_loader, direct):
         else:
             for data, target in tqdm(test_loader, desc='test', unit='batch', ncols=80, leave=False):
                 data, target = data.to(device), target.long().to(device)
+                model.l1_w.data = weight*0.13/(torch.abs(torch.max(weight)))
+                model.l1_b.data = bias*0.13/(torch.abs(torch.max(weight)))
                 output = model(data)
                 test_loss += F.nll_loss(
                     output, target, reduction="sum"
@@ -188,9 +224,11 @@ torch.manual_seed(rseed)
 
 lr = 0.05
 if ctext is True and direct is False:
-    model = SeqNetctext().to(DEVICE)
+    model = SeqNetCtext().to(DEVICE)
+    modeltest = SeqNetCtextInf().to(DEVICE)
 else:
     model = SeqNet().to(DEVICE)
+    modeltest = SeqNetInf().to(DEVICE)
 optimizer = optim.Adam(model.parameters(), lr=lr)
 epochs = 1000
 
@@ -200,8 +238,8 @@ mean_losses = []
 accuracies = []
 pbar = trange(epochs, ncols=80, unit="epoch")
 for epoch in pbar:
-    training_loss, mean_loss = train(model, DEVICE, train_loader, optimizer, direct)
-    test_loss, accuracy = test(model, DEVICE, test_loader, direct)
+    training_loss, mean_loss, weight, bias = train(model, DEVICE, train_loader, optimizer, direct)
+    test_loss, accuracy = test(modeltest, DEVICE, test_loader, direct, weight, bias)
     train_losses += training_loss
     mean_losses.append(mean_loss)
     test_losses.append(test_loss)
