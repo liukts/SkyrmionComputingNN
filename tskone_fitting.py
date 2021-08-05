@@ -12,7 +12,7 @@ config1_ext = np.array([-1.202,-1.191,-1.180,-1.123,-1.053,-1.024,-0.996,-0.798,
 config1 = np.array([0.996,1.024,1.053,1.123,1.180,1.191,1.202])
 config2 = np.array([0.740,0.799,0.834,0.895,0.941,0.967,0.990])
 
-degree = 3
+degree = 2
 c1poly = np.polyfit(input,config1,degree)
 params = curve_fit(fit_func,input_ext,config1_ext)
 c1poly_ext = params[0]
@@ -23,18 +23,20 @@ x_ext = np.linspace(-4.5,4.5,901)
 c1x = 0
 c1x_ext = 0
 c2x = 0
-for i in range(0,degree):
+for i in range(0,degree+1):
     c1x += c1poly[i]*x**(degree-i)
     c1x_ext += c1poly_ext[i]*x_ext**(degree-i)
     c2x += c2poly[i]*x**(degree-i)
 
-#plt.plot(input,config1)
+plt.plot(input,config1,'.-')
 plt.plot(input,config2,'.-')
-plt.plot(input_ext,config1_ext,'.-')
-#plt.plot(x,c1x)
-plt.plot(x_ext,abs(c1x_ext))
-plt.plot(x,c2x)
+#plt.plot(input_ext,config1_ext,'.-')
+plt.plot(x,c1x,'--',color='dimgray')
+#plt.plot(x_ext,abs(c1x_ext))
+plt.plot(x,c2x,'--',color='dimgray')
+plt.xlabel(r'H$_0$ (mT)')
+plt.ylabel(r'$\Delta$ M')
 plt.show()
 
-np.save('./poly/c1poly.npy',c1poly_ext)
-np.save('./poly/c2poly.npy',c2poly)
+# np.save('./poly/c1poly.npy',c1poly_ext)
+# np.save('./poly/c2poly.npy',c2poly)
