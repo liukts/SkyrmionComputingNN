@@ -1,9 +1,5 @@
 # SkyrmionComputingNN
 
-Repository for applying T-SKONE neuron on an SNN task. 
+Repository for applying T-SKONE neuron on the Wisconsin breast cancer dataset task. 
 
-The following requirements are necessary to run the programs in the repo:
- - Norse: https://github.com/electronicvisions/norse
-
-Instructions:
- - Install norse and run wcancer_snn.py.
+Run wcancer_ann_tskone.py to obtain results.
