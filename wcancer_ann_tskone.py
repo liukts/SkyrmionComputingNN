@@ -21,17 +21,18 @@ else:
     DEVICE = torch.device("cpu")
 
 # CONST
-BATCH_SIZE = 500
-EPOCHS = 800
-LR = 0.05
+BATCH_SIZE = 100
+EPOCHS = 500
+LR = 0.8
 SEEDS = 5
+DUMMY = 0
 
 # FLAGS
 ctext = True
-direct = False
+direct = True
 
 # folder to save results
-target_dir = "0725_tskone_context"
+target_dir = "0920_tskone_direct_lr0.8"
 
 if not os.path.isdir("./context/"):
     os.mkdir("./context/")
@@ -54,12 +55,19 @@ else:
     sex = {"F": 1, "M": 0}
     x['sex'] = x['sex'].replace(sex)
     x = x.replace(check)
-context = torch.from_numpy(np.load('contextmask.npy')).to(DEVICE)
+context = np.load('contextmask.npy')
+ctextkey = np.load('context.npy')
+for i in range(0,DUMMY):
+    context = np.hstack((context,ctextkey[:,i].reshape(-1,1)))
+context = torch.from_numpy(context).to(DEVICE)
 x_train, x_test, y_train, y_test, c_train, c_test = train_test_split(x, y, context, test_size=0.2,
                                                     random_state=85)
 scaler = MinMaxScaler((3,4.5))
 x_train_trans = scaler.fit_transform(x_train)
 x_test_trans = scaler.fit_transform(x_test)
+for i in range(0,DUMMY):
+    x_train_trans = np.hstack((x_train_trans,3*np.ones((np.shape(x_train_trans)[0],1))))
+    x_test_trans = np.hstack((x_test_trans,3*np.ones((np.shape(x_test_trans)[0],1))))
 if direct is False:
     train = data_utils.TensorDataset(torch.from_numpy(x_train_trans).float(),
                                     torch.from_numpy(y_train.to_numpy()).float(),
@@ -75,7 +83,7 @@ else:
 train_loader = data_utils.DataLoader(train, batch_size=BATCH_SIZE, shuffle=False)
 test_loader = data_utils.DataLoader(test, batch_size=BATCH_SIZE, shuffle=False)
 
-INPUT_SIZE = x_train.shape[1]
+INPUT_SIZE = x_train_trans.shape[1]
 
 class SeqNet(nn.Module):
     def __init__(self):

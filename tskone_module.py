@@ -33,7 +33,7 @@ def tskone(input: Tensor, config: Tensor) -> Tensor:
     
     # tskone calculation, input in mT, output in dM
      
-    return torch.where(config<2,-0.03828571*torch.square(input)+0.44128571*input+0.003,
+    return torch.where(config<1.5,-0.03828571*torch.square(input)+0.44128571*input+0.003,
                          -0.04857143*input**2+0.53471429*input-0.42914286)
 
 def tskone_out(input: Tensor) -> Tensor:
