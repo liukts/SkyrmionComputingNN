@@ -21,18 +21,19 @@ else:
     DEVICE = torch.device("cpu")
 
 # CONST
-BATCH_SIZE = 100
-EPOCHS = 500
-LR = 0.8
+BATCH_SIZE = 1000
+EPOCHS = 300
+LR = 0.3
 SEEDS = 5
+seedlist = np.linspace(0,4,SEEDS)
 DUMMY = 0
 
 # FLAGS
-ctext = True
+ctext = True 
 direct = True
 
 # folder to save results
-target_dir = "0920_tskone_direct_lr0.8"
+target_dir = "220318_tskone_direct_lr0.3"
 
 if not os.path.isdir("./context/"):
     os.mkdir("./context/")
@@ -55,8 +56,8 @@ else:
     sex = {"F": 1, "M": 0}
     x['sex'] = x['sex'].replace(sex)
     x = x.replace(check)
-context = np.load('contextmask.npy')
-ctextkey = np.load('context.npy')
+context = np.load('contextmask1.npy')
+ctextkey = np.load('context1.npy')
 for i in range(0,DUMMY):
     context = np.hstack((context,ctextkey[:,i].reshape(-1,1)))
 context = torch.from_numpy(context).to(DEVICE)
@@ -156,8 +157,9 @@ class SeqNetCtextInf(nn.Module):
 def train(model, device, train_loader, optimizer, direct):
     model.train()
     losses = []
+    correct = 0
     if direct is False:
-        for data, target, context in tqdm(train_loader, desc='train', unit='batch', ncols=80, leave=False):
+        for data, target, context in tqdm(train_loader, desc='train', unit='batch', ncols=120, leave=False):
             data, target, context = data.to(device), target.long().to(device), context.to(device)
             optimizer.zero_grad()
             output = model(data,context)
@@ -165,8 +167,12 @@ def train(model, device, train_loader, optimizer, direct):
             loss.backward()
             optimizer.step()
             losses.append(loss.item())
+            pred = output.argmax(
+                dim=1, keepdim=True
+            )  # get the index of the max log-probability
+            correct += pred.eq(target.view_as(pred)).sum().item()
     else:
-        for data, target in tqdm(train_loader, desc='train', unit='batch', ncols=80, leave=False):
+        for data, target in tqdm(train_loader, desc='train', unit='batch', ncols=120, leave=False):
             data, target = data.to(device), target.long().to(device)
             optimizer.zero_grad()
             output = model(data)
@@ -174,11 +180,16 @@ def train(model, device, train_loader, optimizer, direct):
             loss.backward()
             optimizer.step()
             losses.append(loss.item())
+            pred = output.argmax(
+                dim=1, keepdim=True
+            )  # get the index of the max log-probability
+            correct += pred.eq(target.view_as(pred)).sum().item()
 
     mean_loss = np.mean(losses)
     weight = model.l1_w
     bias = model.l1_b
-    return losses, mean_loss, weight, bias
+    accuracy = 100.0 * correct / len(train_loader.dataset)
+    return losses, mean_loss, weight, bias, accuracy
 
 def test(model, device, test_loader, direct, weight, bias):
     model.eval()
@@ -186,7 +197,7 @@ def test(model, device, test_loader, direct, weight, bias):
     correct = 0
     with torch.no_grad():
         if direct is False:
-            for data, target, context in tqdm(test_loader, desc='test', unit='batch', ncols=80, leave=False):
+            for data, target, context in tqdm(test_loader, desc='test', unit='batch', ncols=120, leave=False):
                 data, target, context = data.to(device), target.long().to(device), context.to(device)
                 model.l1_w.data = weight*0.13/(torch.abs(torch.max(weight)))
                 model.l1_b.data = bias*0.13/(torch.abs(torch.max(weight)))
@@ -199,7 +210,7 @@ def test(model, device, test_loader, direct, weight, bias):
                 )  # get the index of the max log-probability
                 correct += pred.eq(target.view_as(pred)).sum().item()
         else:
-            for data, target in tqdm(test_loader, desc='test', unit='batch', ncols=80, leave=False):
+            for data, target in tqdm(test_loader, desc='test', unit='batch', ncols=120, leave=False):
                 data, target = data.to(device), target.long().to(device)
                 model.l1_w.data = weight*0.13/(torch.abs(torch.max(weight)))
                 model.l1_b.data = bias*0.13/(torch.abs(torch.max(weight)))
@@ -235,8 +246,9 @@ train_losses = np.empty((SEEDS,EPOCHS))
 test_losses = np.empty((SEEDS,EPOCHS))
 mean_losses = np.empty((SEEDS,EPOCHS))
 accuracies = np.empty((SEEDS,EPOCHS))
-for rseed in range(0,SEEDS):
-    torch.manual_seed(rseed)
+train_accs = np.empty((SEEDS,EPOCHS))
+for rseed in range(SEEDS):
+    torch.manual_seed(seedlist[rseed])
     if ctext is True and direct is False:
         model = SeqNetCtext().to(DEVICE)
         modeltest = SeqNetCtextInf().to(DEVICE)
@@ -245,20 +257,22 @@ for rseed in range(0,SEEDS):
         modeltest = SeqNetInf().to(DEVICE)
     optimizer = optim.Adam(model.parameters(), lr=LR)
 
-    pbar = trange(EPOCHS, ncols=80, unit="epoch")
+    pbar = trange(EPOCHS, ncols=120, unit="epoch")
     for epoch in pbar:
-        training_loss, mean_loss, weight, bias = train(model, DEVICE, train_loader, optimizer, direct)
+        training_loss, mean_loss, weight, bias, train_acc = train(model, DEVICE, train_loader, optimizer, direct)
         test_loss, accuracy = test(modeltest, DEVICE, test_loader, direct, weight, bias)
         # train_losses[rseed,epoch] = training_loss
         mean_losses[rseed,epoch] = mean_loss
         test_losses[rseed,epoch] = test_loss
         accuracies[rseed,epoch] = accuracy
-        pbar.set_postfix(accuracy=accuracy)
+        train_accs[rseed,epoch] = train_acc
+        pbar.set_postfix(accuracy=(train_acc,accuracy))
 
 # np.save("./outputs/context/" + target_dir + "/train_losses.npy", np.array(train_losses))
 np.save("./context/" + target_dir + "/mean_losses.npy", np.array(mean_losses))
 np.save("./context/" + target_dir + "/test_losses.npy", np.array(test_losses))
 np.save("./context/" + target_dir + "/accuracies.npy", np.array(accuracies))
+np.save("./context/" + target_dir + "/train_accs.npy", np.array(train_accs))
 model_path = "./context/" + target_dir + "/model.pt"
 save(
     model_path,
