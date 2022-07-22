@@ -63,7 +63,7 @@ for i in range(0,DUMMY):
 context = torch.from_numpy(context).to(DEVICE)
 x_train, x_test, y_train, y_test, c_train, c_test = train_test_split(x, y, context, test_size=0.2,
                                                     random_state=85)
-scaler = MinMaxScaler((3,4.5))
+scaler = MinMaxScaler((30,45))
 x_train_trans = scaler.fit_transform(x_train)
 x_test_trans = scaler.fit_transform(x_test)
 for i in range(0,DUMMY):
